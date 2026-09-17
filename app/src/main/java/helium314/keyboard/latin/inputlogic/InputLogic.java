@@ -104,7 +104,7 @@ public final class InputLogic {
     /* package */ final WordComposer mWordComposer;
     public final RichInputConnection mConnection;
     private final RecapitalizeStatus mRecapitalizeStatus = new RecapitalizeStatus();
-
+    private final MyanmarReorderHelper mMyanmarReorderHelper = new MyanmarReorderHelper();
     private int mDeleteCount;
     private long mLastKeyTime;
     // todo: this is not used, so either remove it or do something with it
@@ -446,62 +446,76 @@ public final class InputLogic {
      * @return the complete transaction object
      */
     public InputTransaction onCodeInput(final SettingsValues settingsValues,
-            @NonNull final Event event, final int keyboardShiftMode,
-            final String currentKeyboardScript, final LatinIME.UIHandler handler) {
-        mWordBeingCorrectedByCursor = null;
-        mJustRevertedACommit = false;
-        final Event processedEvent = mWordComposer.processEvent(event);
-        final InputTransaction inputTransaction = new InputTransaction(settingsValues,
-                processedEvent, SystemClock.uptimeMillis(), mSpaceState,
+        @NonNull final Event event, final int keyboardShiftMode,
+        final String currentKeyboardScript, final LatinIME.UIHandler handler) {
+    mWordBeingCorrectedByCursor = null;
+    mJustRevertedACommit = false;
+
+    // --- Myanmar ေ reorder ---------------------------------------------
+    if (!event.isFunctionalKeyEvent()
+            && mMyanmarReorderHelper.handleCodePoint(event.getCodePoint(), mConnection)) {
+        mWordComposer.reset();
+        final InputTransaction myanmarTransaction = new InputTransaction(settingsValues, event,
+                SystemClock.uptimeMillis(), mSpaceState,
                 getActualCapsMode(settingsValues, keyboardShiftMode));
-        if (processedEvent.getKeyCode() != KeyCode.DELETE
-                || inputTransaction.getTimestamp() > mLastKeyTime + Constants.LONG_PRESS_MILLISECONDS) {
-            mDeleteCount = 0;
-        }
-        mLastKeyTime = inputTransaction.getTimestamp();
-        mConnection.beginBatchEdit();
-        if (!mWordComposer.isComposingWord()) {
-            // TODO: is this useful? It doesn't look like it should be done here, but rather after
-            // a word is committed.
-            mIsAutoCorrectionIndicatorOn = false;
-        }
-
-        // TODO: Consolidate the double-space period timer, mLastKeyTime, and the space state.
-        if (processedEvent.getCodePoint() != Constants.CODE_SPACE) {
-            cancelDoubleSpacePeriodCountdown();
-        }
-
-        Event currentEvent = processedEvent;
-        while (null != currentEvent) {
-            if (currentEvent.isConsumed()) {
-                handleConsumedEvent(currentEvent, inputTransaction);
-            } else if (currentEvent.isFunctionalKeyEvent()) {
-                handleFunctionalEvent(currentEvent, inputTransaction, currentKeyboardScript, handler);
-            } else {
-                handleNonFunctionalEvent(currentEvent, inputTransaction, handler);
-            }
-            currentEvent = currentEvent.getNextEvent();
-        }
-        // Try to record the word being corrected when the user enters a word character or
-        // the backspace key.
-        if (!mConnection.hasSlowInputConnection() && !mWordComposer.isComposingWord()
-                && (settingsValues.isWordCodePoint(processedEvent.getCodePoint())
-                    || processedEvent.getKeyCode() == KeyCode.DELETE)
-                ) {
-            mWordBeingCorrectedByCursor = getWordAtCursor(settingsValues, currentKeyboardScript);
-        }
-        if (!inputTransaction.didAutoCorrect() && processedEvent.getKeyCode() != KeyCode.SHIFT
-                && processedEvent.getKeyCode() != KeyCode.CAPS_LOCK
-                && processedEvent.getKeyCode() != KeyCode.SYMBOL_ALPHA
-                && processedEvent.getKeyCode() != KeyCode.ALPHA
-                && processedEvent.getKeyCode() != KeyCode.SYMBOL)
-            mLastComposedWord.deactivate();
-        if (KeyCode.DELETE != processedEvent.getKeyCode()) {
-            mEnteredText = null;
-        }
-        mConnection.endBatchEdit();
-        return inputTransaction;
+        myanmarTransaction.setDidAffectContents();
+        myanmarTransaction.requireShiftUpdate(InputTransaction.SHIFT_UPDATE_NOW);
+        return myanmarTransaction;
     }
+    // --- end Myanmar ေ reorder -------------------------------------------
+
+    final Event processedEvent = mWordComposer.processEvent(event);
+    final InputTransaction inputTransaction = new InputTransaction(settingsValues,
+            processedEvent, SystemClock.uptimeMillis(), mSpaceState,
+            getActualCapsMode(settingsValues, keyboardShiftMode));
+    if (processedEvent.getKeyCode() != KeyCode.DELETE
+            || inputTransaction.getTimestamp() > mLastKeyTime + Constants.LONG_PRESS_MILLISECONDS) {
+        mDeleteCount = 0;
+    }
+    mLastKeyTime = inputTransaction.getTimestamp();
+    mConnection.beginBatchEdit();
+    if (!mWordComposer.isComposingWord()) {
+        // TODO: is this useful? It doesn't look like it should be done here, but rather after
+        // a word is committed.
+        mIsAutoCorrectionIndicatorOn = false;
+    }
+
+    // TODO: Consolidate the double-space period timer, mLastKeyTime, and the space state.
+    if (processedEvent.getCodePoint() != Constants.CODE_SPACE) {
+        cancelDoubleSpacePeriodCountdown();
+    }
+
+    Event currentEvent = processedEvent;
+    while (null != currentEvent) {
+        if (currentEvent.isConsumed()) {
+            handleConsumedEvent(currentEvent, inputTransaction);
+        } else if (currentEvent.isFunctionalKeyEvent()) {
+            handleFunctionalEvent(currentEvent, inputTransaction, currentKeyboardScript, handler);
+        } else {
+            handleNonFunctionalEvent(currentEvent, inputTransaction, handler);
+        }
+        currentEvent = currentEvent.getNextEvent();
+    }
+    // Try to record the word being corrected when the user enters a word character or
+    // the backspace key.
+    if (!mConnection.hasSlowInputConnection() && !mWordComposer.isComposingWord()
+            && (settingsValues.isWordCodePoint(processedEvent.getCodePoint())
+                || processedEvent.getKeyCode() == KeyCode.DELETE)
+            ) {
+        mWordBeingCorrectedByCursor = getWordAtCursor(settingsValues, currentKeyboardScript);
+    }
+    if (!inputTransaction.didAutoCorrect() && processedEvent.getKeyCode() != KeyCode.SHIFT
+            && processedEvent.getKeyCode() != KeyCode.CAPS_LOCK
+            && processedEvent.getKeyCode() != KeyCode.SYMBOL_ALPHA
+            && processedEvent.getKeyCode() != KeyCode.ALPHA
+            && processedEvent.getKeyCode() != KeyCode.SYMBOL)
+        mLastComposedWord.deactivate();
+    if (KeyCode.DELETE != processedEvent.getKeyCode()) {
+        mEnteredText = null;
+    }
+    mConnection.endBatchEdit();
+    return inputTransaction;
+}
 
     public void onStartBatchInput(final SettingsValues settingsValues,
             final KeyboardSwitcher keyboardSwitcher, final LatinIME.UIHandler handler) {
@@ -1272,9 +1286,10 @@ public final class InputLogic {
      * @param inputTransaction The transaction in progress.
      */
     private void handleBackspaceEvent(final Event event, final InputTransaction inputTransaction,
-            final String currentKeyboardScript) {
-        mSpaceState = SpaceState.NONE;
-        mDeleteCount++;
+        final String currentKeyboardScript) {
+    mMyanmarReorderHelper.reset(); // <-- added
+    mSpaceState = SpaceState.NONE;
+    mDeleteCount++;
 
         // In many cases after backspace, we need to update the shift state. Normally we need
         // to do this right away to avoid the shift state being out of date in case the user types
